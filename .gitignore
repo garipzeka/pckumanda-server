@@ -1,0 +1,13 @@
+# Derleme çıktıları (Release'de dağıtılır) — sadece güncel sunucu EXE'i izlenir
+*.exe
+!dist/PCKumandaServer.exe
+
+# Sertifika dosyaları (özel anahtar asla repoya girmez; .cer genel anahtardır ama repoya gerek yok)
+*.cer
+*.pfx
+*.pvk
+
+# Geçici dosyalar
+*.log
+*.tmp
+Thumbs.db
