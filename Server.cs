@@ -150,6 +150,19 @@ namespace PCKumanda
             return Secret;
         }
 
+        // Kullanicinin kendi sectigi PIN (4 haneli rakam)
+        public static bool SetCustom(string pin)
+        {
+            if (string.IsNullOrEmpty(pin) || pin.Length != 4) return false;
+            foreach (char c in pin) if (c < '0' || c > '9') return false;
+            lock (pinGate)
+            {
+                secret = pin;
+                Save();
+            }
+            return true;
+        }
+
         private static string Generate()
         {
             // 4 haneli PIN — QR ile taşınır, elle girilebilir; hatalı denemeler IP bazlı kilitlenir
@@ -373,13 +386,8 @@ namespace PCKumanda
 
             lblPin = new Label { Text = "", Location = new Point(15, 434), AutoSize = true, ForeColor = Color.DarkBlue, Font = new Font("Segoe UI", 10f, FontStyle.Bold) };
             lblPin.Text = "Eşleme PIN'i: " + Pairing.Secret;
-            Button btnPin = new Button { Text = "PIN'i Yenile", Location = new Point(295, 430), Size = new Size(110, 28) };
-            btnPin.Click += delegate
-            {
-                Pairing.Regenerate();
-                lblPin.Text = "Eşleme PIN'i: " + Pairing.Secret;
-                Log("Eşleme PIN'i yenilendi. QR'ı tekrar okutun / PIN'i tekrar girin.");
-            };
+            Button btnPin = new Button { Text = "PIN Değiştir", Location = new Point(295, 430), Size = new Size(110, 28) };
+            btnPin.Click += delegate { ShowPinDialog(); };
 
             Controls.Add(t1);
             Controls.Add(lblAddr);
@@ -426,8 +434,9 @@ namespace PCKumanda
                     Hide();
                     return;
                 }
-                if (cfg.AutoMinimize && !hasAutoMinimized)
+                if (cfg.AutoMinimize && !hasAutoMinimized && NetServer.ApprovedDeviceCount > 0)
                 {
+                    // İlk kurulumda (henüz onaylı cihaz yok) pencere açık kalır: IP + PIN ekranda görünür
                     hasAutoMinimized = true;
                     System.Windows.Forms.Timer minTimer = new System.Windows.Forms.Timer();
                     minTimer.Interval = 1200;
@@ -610,6 +619,65 @@ namespace PCKumanda
                 f.ShowDialog(this);
             }
             return result[0];
+        }
+
+        // Telefonda PIN girilecek: pencereyi öne getirip PIN'i görünür yap
+        internal static void ShowForPairing()
+        {
+            MainForm m = Instance;
+            if (m == null) return;
+            try
+            {
+                m.BeginInvoke((MethodInvoker)delegate
+                {
+                    m.ShowSelf();
+                    if (m.lblPin != null) m.lblPin.ForeColor = Color.Crimson;
+                });
+            }
+            catch { }
+        }
+
+        // Kullanıcının kendi PIN'ini belirleyebileceği ekran (4 hane; boş geçilirse rastgele üretilir)
+        private void ShowPinDialog()
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "Eşleme PIN'i Belirle";
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.MinimizeBox = false;
+                f.MaximizeBox = false;
+                f.StartPosition = FormStartPosition.CenterParent;
+                f.ClientSize = new Size(330, 150);
+                f.Icon = Icon;
+
+                Label l = new Label { Text = "Yeni PIN (4 haneli rakam):", Location = new Point(15, 18), AutoSize = true };
+                TextBox tb = new TextBox { Location = new Point(15, 42), Width = 130, MaxLength = 4, Font = new Font("Consolas", 12f) };
+                tb.Text = Pairing.Secret;
+                Button ok = new Button { Text = "Kaydet", Location = new Point(15, 95), Size = new Size(150, 34) };
+                Button gen = new Button { Text = "Rastgele Üret", Location = new Point(175, 95), Size = new Size(140, 34) };
+                ok.Click += delegate
+                {
+                    string p = tb.Text.Trim();
+                    if (!Pairing.SetCustom(p))
+                    {
+                        MessageBox.Show(f, "PIN 4 haneli rakam olmalıdır.", "PC Kumanda", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    lblPin.Text = "Eşleme PIN'i: " + Pairing.Secret;
+                    Log("Eşleme PIN'i güncellendi. QR'ı tekrar okutun / telefonda PIN'i güncelleyin.");
+                    f.Close();
+                };
+                gen.Click += delegate
+                {
+                    tb.Text = Pairing.Regenerate();
+                    lblPin.Text = "Eşleme PIN'i: " + Pairing.Secret;
+                };
+                f.Controls.Add(l);
+                f.Controls.Add(tb);
+                f.Controls.Add(ok);
+                f.Controls.Add(gen);
+                f.ShowDialog(this);
+            }
         }
 
         private void Log(string msg)
@@ -2405,6 +2473,12 @@ namespace PCKumanda
             lock (devGate) { return allowedDevices.Contains(devKey); }
         }
 
+        // Onaylanmış cihaz sayısı (ilk kurulumda pencereyi açık tutmak için)
+        public static int ApprovedDeviceCount
+        {
+            get { lock (devGate) { return allowedDevices.Count; } }
+        }
+
         private static void SaveDevices()
         {
             try
@@ -2895,6 +2969,8 @@ namespace PCKumanda
                     if (!Pairing.IsLockedOut(clientIp)) Pairing.RecordFail(clientIp);
                     bool locked = Pairing.IsLockedOut(clientIp);
                     if (log != null) log("PIN reddi: " + clientIp + (locked ? " (5 dk kilitli)" : ""));
+                    // Telefonda PIN girilecek: pencereyi öne getir, PIN ekranda görünsün
+                    if (!locked) MainForm.ShowForPairing();
                     WriteResp(ns, 403, "Forbidden", "application/json", "{\"ok\":false,\"error\":\"pin gerekli\"}");
                     return;
                 }
