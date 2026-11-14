@@ -2513,6 +2513,7 @@ namespace PCKumanda
                 {
                     UdpClient u = new UdpClient(UdpPort);
                     SocketLifetime.Private(u.Client);
+                    try { u.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.TypeOfService, 0x10); } catch { } // IPTOS_LOWDELAY (best-effort)
                     while (true)
                     {
                         IPEndPoint ep = new IPEndPoint(IPAddress.Any, 0);
