@@ -241,10 +241,24 @@ namespace PCKumanda
     internal class MainForm : Form
     {
         public static MainForm Instance;
+
+        // ---- Modern koyu tema ----
+        private static readonly Color ThemeBg = Color.FromArgb(24, 28, 38);
+        private static readonly Color ThemeCard = Color.FromArgb(33, 39, 54);
+        private static readonly Color ThemeHover = Color.FromArgb(46, 54, 74);
+        private static readonly Color ThemeText = Color.FromArgb(235, 238, 245);
+        private static readonly Color ThemeDim = Color.FromArgb(148, 158, 178);
+        private static readonly Color ThemeAccent = Color.FromArgb(124, 108, 255);
+        private static readonly Color ThemeGreen = Color.FromArgb(76, 204, 130);
+
         private Label lblAddr;
         private Label lblMac;
         private Label lblPin;
         private Label lblMicStatus;
+        private Label lblStatus;
+        private Label lblUptime;
+        private Label lblData;
+        private Label lblDevices;
         private TextBox txtLog;
         private CheckBox chkAuto;
         private CheckBox chkAutoMin;
@@ -253,6 +267,78 @@ namespace PCKumanda
         private ScreenViewerForm screenViewer;
         private bool allowVisible;
         private bool hasAutoMinimized = false;
+        private int pinHighlightUntil;
+
+        [DllImport("kernel32.dll")]
+        private static extern ulong GetTickCount64();
+
+        private static string FormatUptime(ulong ms)
+        {
+            ulong totalSec = ms / 1000;
+            ulong d = totalSec / 86400;
+            ulong h = (totalSec % 86400) / 3600;
+            ulong m = (totalSec % 3600) / 60;
+            if (d > 0) return d + " gün " + h + " saat";
+            if (h > 0) return h + " saat " + m + " dk";
+            return m + " dk " + (totalSec % 60) + " sn";
+        }
+
+        private static string FormatBytes(long b)
+        {
+            if (b >= 1073741824) return (b / 1073741824.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + " GB";
+            if (b >= 1048576) return (b / 1048576.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " MB";
+            if (b >= 1024) return (b / 1024.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " KB";
+            return b + " B";
+        }
+
+        // Tüm aktif arayüzlerin toplam gönderilen/alınan baytları (oturum başlangıcına göre fark = oturum kullanımı)
+        private static void TotalNetworkBytes(out long sent, out long recv)
+        {
+            sent = 0; recv = 0;
+            try
+            {
+                foreach (System.Net.NetworkInformation.NetworkInterface nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                    if (nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                    try
+                    {
+                        System.Net.NetworkInformation.IPv4InterfaceStatistics st = nic.GetIPv4Statistics();
+                        sent += st.BytesSent;
+                        recv += st.BytesReceived;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        private Label InfoRow(Panel p, string key, string value, int y)
+        {
+            Label k = new Label { Text = key, Location = new Point(16, y + 2), AutoSize = true, ForeColor = ThemeDim };
+            Label v = new Label { Text = value, Location = new Point(170, y), AutoSize = true, ForeColor = ThemeText };
+            p.Controls.Add(k);
+            p.Controls.Add(v);
+            return v;
+        }
+
+        private Button MakeButton(string text, int x, int y, EventHandler onClick)
+        {
+            Button b = new Button
+            {
+                Text = text,
+                Location = new Point(x, y),
+                Size = new Size(136, 34),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = ThemeCard,
+                ForeColor = ThemeText
+            };
+            b.FlatAppearance.BorderSize = 0;
+            b.FlatAppearance.MouseOverBackColor = ThemeHover;
+            b.Click += onClick;
+            Controls.Add(b);
+            return b;
+        }
 
         public MainForm(bool startMinimized = false)
         {
@@ -271,19 +357,46 @@ namespace PCKumanda
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(420, 474);
+            ClientSize = new Size(460, 700);
             Font = new Font("Segoe UI", 9.5f);
-            // ikon yukarida EXE'den alindi
+            BackColor = ThemeBg;
 
-            Label t1 = new Label { Text = "Bilgisayar adı: " + Environment.MachineName, Location = new Point(15, 12), AutoSize = true };
-            lblAddr = new Label { Text = "", Location = new Point(15, 34), AutoSize = true, ForeColor = Color.DarkGreen, Font = new Font("Segoe UI", 10f, FontStyle.Bold) };
-            lblMac = new Label { Text = "MAC (WoL): …", Location = new Point(15, 58), AutoSize = true, ForeColor = Color.DimGray };
+            // ---- Üst başlık ----
+            Label title = new Label { Text = "PC Kumanda", Location = new Point(16, 14), AutoSize = true, ForeColor = ThemeText, Font = new Font("Segoe UI", 15f, FontStyle.Bold) };
+            lblStatus = new Label { Text = "●  Çalışıyor", Location = new Point(330, 22), AutoSize = true, ForeColor = ThemeGreen, Font = new Font("Segoe UI", 10f, FontStyle.Bold) };
 
-            chkAuto = new CheckBox { Text = "Windows ile başlat", Location = new Point(15, 84), AutoSize = true };
+            // ---- Bilgi kartı ----
+            Panel info = new Panel { Location = new Point(16, 56), Size = new Size(428, 172), BackColor = ThemeCard };
+            InfoRow(info, "Bilgisayar", Environment.MachineName, 12);
+            lblAddr = InfoRow(info, "Adres", "", 38);
+            lblAddr.ForeColor = ThemeGreen;
+            lblMac = InfoRow(info, "MAC (WoL)", "", 64);
+            lblMac.ForeColor = ThemeDim;
+            lblUptime = InfoRow(info, "Bilgisayar açık", "", 90);
+            lblData = InfoRow(info, "Veri (oturum)", "", 116);
+            lblDevices = InfoRow(info, "Onaylı cihaz", "", 142);
+            Controls.Add(info);
+
+            // ---- PIN kartı ----
+            Panel pinCard = new Panel { Location = new Point(16, 240), Size = new Size(428, 74), BackColor = ThemeCard };
+            Label pinCaption = new Label { Text = "EŞLEME PIN'İ", Location = new Point(16, 12), AutoSize = true, ForeColor = ThemeDim, Font = new Font("Segoe UI", 8f) };
+            lblPin = new Label { Text = Pairing.Secret, Location = new Point(16, 30), AutoSize = true, ForeColor = ThemeAccent, Font = new Font("Consolas", 20f, FontStyle.Bold) };
+            Button btnPin = new Button { Text = "PIN Değiştir", Location = new Point(300, 22), Size = new Size(112, 34), FlatStyle = FlatStyle.Flat, BackColor = ThemeHover, ForeColor = ThemeText };
+            btnPin.FlatAppearance.BorderSize = 0;
+            btnPin.FlatAppearance.MouseOverBackColor = ThemeCard;
+            btnPin.Click += delegate { ShowPinDialog(); };
+            pinCard.Controls.Add(pinCaption);
+            pinCard.Controls.Add(lblPin);
+            pinCard.Controls.Add(btnPin);
+            Controls.Add(pinCard);
+
+            Label pairHint = new Label { Text = "Telefonda 'QR ile bağlan' ile QR'ı okut ya da PIN'i elle girin.", Location = new Point(18, 320), AutoSize = true, ForeColor = ThemeDim, Font = new Font("Segoe UI", 8.5f) };
+
+            chkAuto = new CheckBox { Text = "Windows ile başlat", Location = new Point(16, 344), AutoSize = true, ForeColor = ThemeText };
             chkAuto.CheckedChanged += delegate { SetAutoStart(chkAuto.Checked); };
             chkAuto.Checked = IsAutoStart();
 
-            chkAutoMin = new CheckBox { Text = "Açılışta tepsiye küçült", Location = new Point(185, 84), AutoSize = true };
+            chkAutoMin = new CheckBox { Text = "Açılışta tepsiye küçült", Location = new Point(240, 344), AutoSize = true, ForeColor = ThemeText };
             chkAutoMin.Checked = cfg.AutoMinimize;
             chkAutoMin.CheckedChanged += delegate
             {
@@ -291,8 +404,8 @@ namespace PCKumanda
                 cfg.Save();
             };
 
-            Label lblMic = new Label { Text = "Mikrofon çıktısı:", Location = new Point(15, 114), AutoSize = true };
-            ComboBox cmbMic = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(125, 110), Size = new Size(280, 28) };
+            Label lblMic = new Label { Text = "Mikrofon çıktısı:", Location = new Point(16, 380), AutoSize = true, ForeColor = ThemeDim };
+            ComboBox cmbMic = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(130, 376), Size = new Size(314, 28), FlatStyle = FlatStyle.Flat, BackColor = ThemeCard, ForeColor = ThemeText };
             cmbMic.Items.Add("Varsayılan (hoparlörler)");
             string[] devices = MicServer.ListDevices();
             foreach (string d in devices) cmbMic.Items.Add(d);
@@ -320,23 +433,14 @@ namespace PCKumanda
                 MicServer.ReopenWave();
             };
 
-            Button btnPair = new Button { Text = "QR ile bağlan", Location = new Point(295, 178), Size = new Size(110, 28) };
-            btnPair.Click += delegate {
-                string ip = "";
-                foreach (IPAddress a in Dns.GetHostEntry(Dns.GetHostName()).AddressList)
-                    if (a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a)) { ip = a.ToString(); break; }
-                if (ip.Length > 0) Process.Start(new ProcessStartInfo("http://" + ip + ":" + cfg.Port + "/pair") { UseShellExecute = true });
-            };
-            Controls.Add(btnPair);
-            Button btnViewer = new Button { Text = "Telefon Ekranı", Location = new Point(15, 146), Size = new Size(115, 28) };
-            btnViewer.Click += delegate
+            // ---- Düğmeler (3 sütun × 2 sıra + tepsi) ----
+            MakeButton("Telefon Ekranı", 16, 414, delegate
             {
                 screenViewer.Show();
                 screenViewer.WindowState = FormWindowState.Normal;
                 screenViewer.Activate();
-            };
-            Button btnFw = new Button { Text = "Güvenlik Duvarı Ekle", Location = new Point(135, 146), Size = new Size(150, 28) };
-            btnFw.Click += delegate
+            });
+            MakeButton("Güvenlik Duvarı", 162, 414, delegate
             {
                 try
                 {
@@ -351,26 +455,28 @@ namespace PCKumanda
                 {
                     Log("Güvenlik duvarı kuralı eklenemedi: " + ex.Message);
                 }
-            };
-            Button btnMin = new Button { Text = "Tepsiye Küçült", Location = new Point(290, 146), Size = new Size(115, 28) };
-            btnMin.Click += delegate
+            });
+            MakeButton("QR ile Bağlan", 308, 414, delegate
+            {
+                string ip = "";
+                foreach (IPAddress a in Dns.GetHostEntry(Dns.GetHostName()).AddressList)
+                    if (a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a)) { ip = a.ToString(); break; }
+                if (ip.Length > 0) Process.Start(new ProcessStartInfo("http://" + ip + ":" + cfg.Port + "/pair") { UseShellExecute = true });
+            });
+            MakeButton("Webcam'i Aç", 16, 454, delegate
+            {
+                EnsureObsWebcam();
+                Log("Webcam açılıyor. Uygulamanızda OBS Virtual Camera'yı seçin.");
+            });
+            MakeButton("Kamera Önizleme", 162, 454, delegate { Process.Start("http://127.0.0.1:40560/"); });
+            MakeButton("Onaylı Cihazlar", 308, 454, delegate { ShowDevicesDialog(); });
+            MakeButton("Tepsiye Küçült", 16, 494, delegate
             {
                 WindowState = FormWindowState.Minimized;
                 Hide();
-            };
+            });
 
-            Button btnWebcam = new Button { Text = "Webcam’i Aç", Location = new Point(15, 178), Size = new Size(125, 28) };
-            btnWebcam.Click += delegate
-            {
-                EnsureObsWebcam();
-                Log("Webcam açılıyor. Uygulamanızda OBS Virtual Camera’yı seçin.");
-            };
-            Button btnCameraPreview = new Button { Text = "Kamera Önizleme", Location = new Point(145, 178), Size = new Size(145, 28) };
-            btnCameraPreview.Click += delegate { Process.Start("http://127.0.0.1:40560/"); };
-            Label webcamHint = new Label { Text = "Kamera: OBS Virtual Camera  |  Mikrofon: CABLE Output", Location = new Point(15, 210), Size = new Size(390, 35), ForeColor = Color.DimGray };
-            Controls.Add(btnWebcam); Controls.Add(btnCameraPreview); Controls.Add(webcamHint);
-
-            lblMicStatus = new Label { Text = "mikrofon: bekleniyor", Location = new Point(15, 246), AutoSize = true, ForeColor = Color.DimGray };
+            lblMicStatus = new Label { Text = "mikrofon: bekleniyor", Location = new Point(162, 502), AutoSize = true, ForeColor = ThemeDim, Font = new Font("Segoe UI", 8.5f) };
             MicServer.SelectedDevice = cfg.MicDev;
             MicServer.Status = delegate(string s)
             {
@@ -382,27 +488,44 @@ namespace PCKumanda
                 catch { }
             };
 
-            txtLog = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Location = new Point(15, 272), Size = new Size(390, 155), BackColor = Color.White, Font = new Font("Consolas", 8.5f) };
+            txtLog = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Location = new Point(16, 528), Size = new Size(428, 156), BackColor = Color.FromArgb(18, 22, 30), ForeColor = ThemeDim, BorderStyle = BorderStyle.None, Font = new Font("Consolas", 8.5f) };
 
-            lblPin = new Label { Text = "", Location = new Point(15, 434), AutoSize = true, ForeColor = Color.DarkBlue, Font = new Font("Segoe UI", 10f, FontStyle.Bold) };
-            lblPin.Text = "Eşleme PIN'i: " + Pairing.Secret;
-            Button btnPin = new Button { Text = "PIN Değiştir", Location = new Point(295, 430), Size = new Size(110, 28) };
-            btnPin.Click += delegate { ShowPinDialog(); };
-
-            Controls.Add(t1);
-            Controls.Add(lblAddr);
-            Controls.Add(lblMac);
+            Controls.Add(title);
+            Controls.Add(lblStatus);
+            Controls.Add(pairHint);
             Controls.Add(chkAuto);
             Controls.Add(chkAutoMin);
-            Controls.Add(btnViewer);
-            Controls.Add(btnFw);
-            Controls.Add(btnMin);
             Controls.Add(lblMic);
             Controls.Add(cmbMic);
             Controls.Add(lblMicStatus);
-            Controls.Add(lblPin);
-            Controls.Add(btnPin);
             Controls.Add(txtLog);
+
+            // ---- Canlı bilgiler (saniyede bir) ----
+            long sentBase, recvBase;
+            TotalNetworkBytes(out sentBase, out recvBase);
+            System.Windows.Forms.Timer live = new System.Windows.Forms.Timer { Interval = 1000 };
+            live.Tick += delegate
+            {
+                try
+                {
+                    lblUptime.Text = FormatUptime(GetTickCount64());
+                    long sent, recv;
+                    TotalNetworkBytes(out sent, out recv);
+                    long dSent = sent - sentBase, dRecv = recv - recvBase;
+                    if (dSent < 0 || dRecv < 0) { sentBase = sent; recvBase = recv; dSent = 0; dRecv = 0; }
+                    lblData.Text = "↓ " + FormatBytes(dRecv) + "   ↑ " + FormatBytes(dSent);
+                    lblDevices.Text = NetServer.ApprovedDeviceCount + " cihaz";
+                    if (pinHighlightUntil != 0 && Environment.TickCount > pinHighlightUntil)
+                    {
+                        lblPin.ForeColor = ThemeAccent;
+                        pinHighlightUntil = 0;
+                    }
+                }
+                catch { }
+            };
+            lblUptime.Text = FormatUptime(GetTickCount64());
+            lblDevices.Text = NetServer.ApprovedDeviceCount + " cihaz";
+            live.Start();
 
             tray = new NotifyIcon();
             tray.Icon = Icon;
@@ -474,8 +597,8 @@ namespace PCKumanda
             string firstIp = ips;
             int comma = ips.IndexOf(',');
             if (comma > 0) firstIp = ips.Substring(0, comma);
-            lblAddr.Text = "Adres: " + firstIp + "   Port: " + cfg.Port;
-            lblMac.Text = "MAC (WoL): " + NetServer.GetMac();
+            lblAddr.Text = firstIp + " : " + cfg.Port;
+            lblMac.Text = NetServer.GetMac();
             Log("Bilgisayardaki tüm adresler: " + ips);
             Log("Sunucu başlatılıyor (port " + cfg.Port + ")...");
 
@@ -632,9 +755,83 @@ namespace PCKumanda
                 {
                     m.ShowSelf();
                     if (m.lblPin != null) m.lblPin.ForeColor = Color.Crimson;
+                    m.pinHighlightUntil = Environment.TickCount + 15000;
                 });
             }
             catch { }
+        }
+
+        // Onayli cihazlari listeler: tek tek sil + tumunu unut
+        private void ShowDevicesDialog()
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "Onaylı Cihazlar";
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.MinimizeBox = false;
+                f.MaximizeBox = false;
+                f.StartPosition = FormStartPosition.CenterParent;
+                f.ClientSize = new Size(430, 390);
+                f.Icon = Icon;
+                f.BackColor = ThemeBg;
+                f.Font = new Font("Segoe UI", 9.5f);
+
+                Panel list = new Panel { Location = new Point(12, 12), Size = new Size(406, 296), BackColor = ThemeCard, AutoScroll = true };
+                f.Controls.Add(list);
+
+                Action refill = null;
+                refill = delegate
+                {
+                    list.Controls.Clear();
+                    int y = 12;
+                    List<KeyValuePair<string, string>> devs = NetServer.ApprovedList();
+                    if (devs.Count == 0)
+                    {
+                        list.Controls.Add(new Label { Text = "Onaylı cihaz yok. Telefonlar bağlanırken PIN + onay isteyecek.", Location = new Point(14, 14), AutoSize = true, ForeColor = ThemeDim });
+                    }
+                    foreach (KeyValuePair<string, string> kv in devs)
+                    {
+                        string key = kv.Key;
+                        string name = string.IsNullOrEmpty(kv.Value) ? key : kv.Value;
+                        string keyShort = key.Length > 30 ? key.Substring(key.Length - 30) : key;
+                        Label n = new Label { Text = name, Location = new Point(14, y), AutoSize = true, ForeColor = ThemeText, MaximumSize = new Size(240, 0) };
+                        Label k = new Label { Text = keyShort, Location = new Point(14, y + 20), AutoSize = true, ForeColor = ThemeDim, Font = new Font("Consolas", 8f) };
+                        Button del = new Button { Text = "Sil", Location = new Point(318, y + 6), Size = new Size(72, 30), FlatStyle = FlatStyle.Flat, BackColor = ThemeHover, ForeColor = ThemeText };
+                        del.FlatAppearance.BorderSize = 0;
+                        del.FlatAppearance.MouseOverBackColor = ThemeCard;
+                        del.Click += delegate
+                        {
+                            if (NetServer.RemoveDevice(key)) Log("Cihaz onayı kaldırıldı: " + name);
+                            refill();
+                        };
+                        list.Controls.Add(n);
+                        list.Controls.Add(k);
+                        list.Controls.Add(del);
+                        y += 56;
+                    }
+                };
+                refill();
+
+                Button all = new Button { Text = "Tümünü Unut", Location = new Point(12, 320), Size = new Size(200, 36), FlatStyle = FlatStyle.Flat, BackColor = ThemeCard, ForeColor = ThemeText };
+                all.FlatAppearance.BorderSize = 0;
+                all.FlatAppearance.MouseOverBackColor = ThemeHover;
+                all.Click += delegate
+                {
+                    if (MessageBox.Show(f, "Onaylı tüm cihazlar unutulacak.\nTelefonlar tekrar PIN + onay isteyecek. Devam edilsin mi?",
+                            "Tümünü Unut", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    {
+                        NetServer.ClearApprovedDevices();
+                        Log("Onaylı cihazlar temizlendi — telefonlar yeniden onay isteyecek.");
+                        refill();
+                    }
+                };
+                Button close = new Button { Text = "Kapat", Location = new Point(218, 320), Size = new Size(200, 36), FlatStyle = FlatStyle.Flat, BackColor = ThemeHover, ForeColor = ThemeText };
+                close.FlatAppearance.BorderSize = 0;
+                close.Click += delegate { f.Close(); };
+                f.Controls.Add(all);
+                f.Controls.Add(close);
+                f.ShowDialog(this);
+            }
         }
 
         // Kullanıcının kendi PIN'ini belirleyebileceği ekran (4 hane; boş geçilirse rastgele üretilir)
@@ -663,14 +860,14 @@ namespace PCKumanda
                         MessageBox.Show(f, "PIN 4 haneli rakam olmalıdır.", "PC Kumanda", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
-                    lblPin.Text = "Eşleme PIN'i: " + Pairing.Secret;
+                    lblPin.Text = Pairing.Secret;
                     Log("Eşleme PIN'i güncellendi. QR'ı tekrar okutun / telefonda PIN'i güncelleyin.");
                     f.Close();
                 };
                 gen.Click += delegate
                 {
                     tb.Text = Pairing.Regenerate();
-                    lblPin.Text = "Eşleme PIN'i: " + Pairing.Secret;
+                    lblPin.Text = Pairing.Secret;
                 };
                 f.Controls.Add(l);
                 f.Controls.Add(tb);
@@ -2450,6 +2647,7 @@ namespace PCKumanda
         public delegate int AuthorizeDelegate(string devKey, string devName);
         private static AuthorizeDelegate authorize;
         private static HashSet<string> allowedDevices = new HashSet<string>();
+        private static Dictionary<string, string> approvedNames = new Dictionary<string, string>(StringComparer.Ordinal);
         private static object devGate = new object();
 
         private static string DevicesPath
@@ -2463,7 +2661,19 @@ namespace PCKumanda
             {
                 if (File.Exists(DevicesPath))
                     foreach (string l in File.ReadAllLines(DevicesPath))
-                        if (l.Trim().Length > 0) allowedDevices.Add(l.Trim());
+                    {
+                        string line = l.Trim();
+                        if (line.Length == 0) continue;
+                        int sep = line.IndexOf('|');
+                        if (sep > 0)
+                        {
+                            string key = line.Substring(0, sep);
+                            string nm = line.Substring(sep + 1);
+                            allowedDevices.Add(key);
+                            approvedNames[key] = nm;
+                        }
+                        else allowedDevices.Add(line);
+                    }
             }
             catch { }
         }
@@ -2486,7 +2696,14 @@ namespace PCKumanda
                 Directory.CreateDirectory(Path.GetDirectoryName(DevicesPath));
                 lock (devGate)
                 {
-                    File.WriteAllLines(DevicesPath, new List<string>(allowedDevices).ToArray());
+                    List<string> lines = new List<string>();
+                    foreach (string k in allowedDevices)
+                    {
+                        string nm;
+                        approvedNames.TryGetValue(k, out nm);
+                        lines.Add(string.IsNullOrEmpty(nm) ? k : k + "|" + nm);
+                    }
+                    File.WriteAllLines(DevicesPath, lines.ToArray());
                 }
             }
             catch { }
@@ -2534,6 +2751,42 @@ namespace PCKumanda
                 if (c > 0 && h.IndexOf(':', c + 1) < 0) h = h.Substring(0, c); // IPv4:port
             }
             return h.Length > 0 && localIps.Contains(h);
+        }
+
+        // Onayli cihaz listesi (anahtar + gorunen ad)
+        public static List<KeyValuePair<string, string>> ApprovedList()
+        {
+            lock (devGate)
+            {
+                List<KeyValuePair<string, string>> list = new List<KeyValuePair<string, string>>();
+                foreach (string k in allowedDevices)
+                {
+                    string nm;
+                    approvedNames.TryGetValue(k, out nm);
+                    list.Add(new KeyValuePair<string, string>(k, nm));
+                }
+                return list;
+            }
+        }
+
+        // Tek bir cihazin onayini kaldir
+        public static bool RemoveDevice(string key)
+        {
+            bool removed;
+            lock (devGate)
+            {
+                removed = allowedDevices.Remove(key);
+                approvedNames.Remove(key);
+            }
+            if (removed) SaveDevices();
+            return removed;
+        }
+
+        // "Cihazları Unut": tum onaylari sil, telefonlar yeniden PIN + onay istesin
+        public static void ClearApprovedDevices()
+        {
+            lock (devGate) { allowedDevices.Clear(); }
+            SaveDevices();
         }
 
         public static void Start(Config config, Action<string> logger, AuthorizeDelegate authorizer)
@@ -2993,9 +3246,9 @@ namespace PCKumanda
                     int decision = authorize != null ? authorize(devKey, devName) : 2;
                     if (decision == 2)
                     {
-                        lock (devGate) { allowedDevices.Add(devKey); }
+                        lock (devGate) { allowedDevices.Add(devKey); approvedNames[devKey] = devName; }
                         SaveDevices();
-                        if (log != null) log("CİHAZ KALICI İZİN: " + devName);
+                        if (log != null) log("CİHAZ GÜVENLİ LİSTEYE ALINDI: " + devName);
                     }
                     else if (decision == 1)
                     {
@@ -3149,11 +3402,23 @@ namespace PCKumanda
                         resp = "{\"ok\":false,\"error\":\"" + JsonEsc(ex.Message) + "\"}";
                     }
                     WriteResp(ns, 200, "OK", "application/json", resp);
-                    if (log != null) log("istek: " + clientIp);
                 }
 
                 if (clientWantsClose) return;
             }
+        }
+
+        // Yuksek frekansli/gurultulu aksiyonlar log'a dusmez (ping, fare, ses... )
+        private static readonly HashSet<string> QuietActions = new HashSet<string> {
+            "ping", "wake_screen", "system_stats", "process_list", "monitors", "monitor_select",
+            "game_state", "volume_get", "volume_up", "volume_down", "volume_set", "volume_mute",
+            "media_play", "media_next", "media_prev", "mouse_move", "mouse_click", "mouse_down",
+            "mouse_up", "mouse_abs_click", "mouse_zoom", "scroll", "key_text", "key_combo"
+        };
+
+        private static bool QuietAction(string a)
+        {
+            return a != null && QuietActions.Contains(a);
         }
 
         private static string HandleApi(string body)
@@ -3359,7 +3624,7 @@ namespace PCKumanda
                     r = "{\"ok\":false,\"error\":\"bilinmeyen action: " + JsonEsc(action) + "\"}";
                     break;
             }
-            if (log != null) log(action + (dry ? " (deneme)" : ""));
+            if (log != null && !QuietAction(action)) log(action + (dry ? " (deneme)" : ""));
             return r;
         }
 
