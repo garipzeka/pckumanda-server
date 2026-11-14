@@ -4,7 +4,7 @@ Telefondan bilgisayarı yönetmenizi sağlayan **PC Kumanda** uygulamasının Wi
 Aynı Wi-Fi ağındaki Android telefondan: dokunmatik fare, ekran yansıtma + tıklama, klavye, ses/medya,
 güç yönetimi, dosya gönderme/çekme, pano paylaşımı ve Wake-on-LAN.
 
-> 📱 Android uygulaması: [garipzeka/pckumanda](https://github.com/garipzeka/pckumanda)
+> 📱 Android uygulaması: **Google Play** (yayına hazırlanıyor)
 
 ## İndir
 

@@ -53,6 +53,7 @@ namespace PCKumanda
         public int Port = 40555;
         public int MicDev = -1; // telefon mikrofonunun çalınacağı ses çıkışı (-1 varsayılan)
         public bool AutoMinimize = true; // açıldıktan sonra tepsiye küçül
+        public bool PinRequired = true; // eşleme PIN'i zorunlu (güvenli varsayılan; kullanıcı kapatabilir)
 
         private static string Dir
         {
@@ -79,6 +80,7 @@ namespace PCKumanda
                         if (k == "port") { int p; if (int.TryParse(v, out p)) c.Port = p; }
                         else if (k == "micdev") { int p; if (int.TryParse(v, out p)) c.MicDev = p; }
                         else if (k == "automin") { bool b; if (bool.TryParse(v, out b)) c.AutoMinimize = b; }
+                        else if (k == "pinreq") { bool b; if (bool.TryParse(v, out b)) c.PinRequired = b; }
                     }
                 }
             }
@@ -91,7 +93,7 @@ namespace PCKumanda
             try
             {
                 Directory.CreateDirectory(Dir);
-                File.WriteAllText(FilePath, "port=" + Port + "\r\nmicdev=" + MicDev + "\r\nautomin=" + AutoMinimize + "\r\n");
+                File.WriteAllText(FilePath, "port=" + Port + "\r\nmicdev=" + MicDev + "\r\nautomin=" + AutoMinimize + "\r\npinreq=" + PinRequired + "\r\n");
             }
             catch { }
         }
@@ -130,7 +132,7 @@ namespace PCKumanda
                 if (File.Exists(FilePath))
                 {
                     string v = File.ReadAllText(FilePath).Trim();
-                    if (v.Length == 6 && IsDigits(v)) { secret = v; return; }
+                    if (v.Length == 4 && IsDigits(v)) { secret = v; return; }
                 }
             }
             catch { }
@@ -150,13 +152,13 @@ namespace PCKumanda
 
         private static string Generate()
         {
-            // 6 haneli PIN — QR ile tasinir, elle girilebilir
+            // 4 haneli PIN — QR ile taşınır, elle girilebilir; hatalı denemeler IP bazlı kilitlenir
             using (System.Security.Cryptography.RNGCryptoServiceProvider rng = new System.Security.Cryptography.RNGCryptoServiceProvider())
             {
                 byte[] b = new byte[4];
                 rng.GetBytes(b);
-                int n = Math.Abs(BitConverter.ToInt32(b, 0)) % 1000000;
-                return n.ToString("D6");
+                int n = Math.Abs(BitConverter.ToInt32(b, 0)) % 10000;
+                return n.ToString("D4");
             }
         }
 
@@ -588,12 +590,13 @@ namespace PCKumanda
                 };
                 Label l3 = new Label
                 {
-                    Text = "İzin verilsin mi?",
-                    Location = new Point(15, 84),
-                    AutoSize = true
+                    Text = "Bu cihaza güvenilsin mi?\n\"Bu cihaza güven\" seçilirse bir daha sorulmaz.",
+                    Location = new Point(15, 78),
+                    AutoSize = true,
+                    MaximumSize = new Size(370, 0)
                 };
-                Button bAlways = new Button { Text = "Sürekli izin ver", Location = new Point(15, 130), Size = new Size(150, 38) };
-                Button bOnce = new Button { Text = "İzin ver", Location = new Point(172, 130), Size = new Size(105, 38) };
+                Button bAlways = new Button { Text = "Bu cihaza güven", Location = new Point(15, 130), Size = new Size(150, 38) };
+                Button bOnce = new Button { Text = "Bu sefer izin ver", Location = new Point(172, 130), Size = new Size(105, 38) };
                 Button bDeny = new Button { Text = "Reddet", Location = new Point(284, 130), Size = new Size(100, 38) };
                 bAlways.Click += delegate { result[0] = 2; f.Close(); };
                 bOnce.Click += delegate { result[0] = 1; f.Close(); };
@@ -1603,7 +1606,7 @@ namespace PCKumanda
                     else if (kv[0] == "pin") pin = kv[1];
                 }
                 // PIN dogru degilse hicbir sey akitilmaz (eski istemciler pin gondermez -> reddedilir)
-                if (!Pairing.IsValid(pin))
+                if (NetServer.PinRequired && !Pairing.IsValid(pin))
                 {
                     if (logRef != null) logRef("video: PIN reddi — akış verilmedi");
                     return;
@@ -1994,7 +1997,7 @@ namespace PCKumanda
                     string[] kv = part.Split('=');
                     if (kv.Length == 2 && kv[0] == "pin") pin = kv[1];
                 }
-                if (!Pairing.IsValid(pin))
+                if (NetServer.PinRequired && !Pairing.IsValid(pin))
                 {
                     if (VideoServer.logRef != null) VideoServer.logRef("Telefon Ekranı: PIN reddi (" + ip + ")");
                     return;
@@ -2248,7 +2251,7 @@ namespace PCKumanda
                         string[] kv = part.Split('=');
                         if (kv.Length == 2 && kv[0] == "pin") pin = kv[1];
                     }
-                    if (!Pairing.IsValid(pin))
+                    if (NetServer.PinRequired && !Pairing.IsValid(pin))
                     {
                         Notify("mikrofon: PIN reddi — bağlantı kapatıldı");
                         throw new IOException("pin reddi");
@@ -2372,6 +2375,8 @@ namespace PCKumanda
         public static Func<string> ClipGet;
         public static Action<string> ClipSet;
         public static Action<string, string> BalloonShow;
+        // PIN zorunluluğu: kullanıcı sunucu penceresinden kapatabilir (güvenli varsayılan: açık)
+        public static bool PinRequired = true;
 
         // Cihaz izinleri: "Sürekli izin ver" denilen cihazlar burada kalıcı saklanır
         public delegate int AuthorizeDelegate(string devKey, string devName);
@@ -2462,6 +2467,7 @@ namespace PCKumanda
             cfg = config;
             log = logger;
             authorize = authorizer;
+            PinRequired = config.PinRequired;
             InitLocalIps();
             LoadDevices();
             Thread tcp = new Thread(TcpLoop);
@@ -2526,12 +2532,21 @@ namespace PCKumanda
                             u.Send(rb, rb.Length, ep);
                             continue;
                         }
-                        // PIN dogrulamasi: komutlar "komut|PIN" biciminde gelir (GP'nin kendi | ayraclarindan
-                        // ayirmak icin SON | segmenti PIN olarak okunur). Yanlis/eksik PIN -> sessizce dusur.
-                        int pinSep = s.LastIndexOf('|');
-                        if (pinSep <= 0 || !Pairing.IsValid(s.Substring(pinSep + 1))) continue;
-                        s = s.Substring(0, pinSep);
-                        if (s.Length == 0 || s[0] != 'M' && s[0] != 'G') continue;
+                        if (PinRequired)
+                        {
+                            // PIN dogrulamasi: komutlar "komut|PIN" biciminde gelir (GP'nin kendi | ayraclarindan
+                            // ayirmak icin SON | segmenti PIN olarak okunur). Yanlis/eksik PIN -> sessizce dusur.
+                            int pinSep = s.LastIndexOf('|');
+                            if (pinSep <= 0 || !Pairing.IsValid(s.Substring(pinSep + 1))) continue;
+                            s = s.Substring(0, pinSep);
+                            if (s.Length == 0 || s[0] != 'M' && s[0] != 'G') continue;
+                        }
+                        else
+                        {
+                            // PIN kapali: telefon yine de eski aliskanlikla "|pin" eklemis olabilir — rakam segmentini at
+                            int sep = s.LastIndexOf('|');
+                            if (sep > 0 && IsDigitRun(s.Substring(sep + 1))) s = s.Substring(0, sep);
+                        }
                         if (s.StartsWith("M")) Input.WakeScreen();
                         if (s.StartsWith("MM:")) // Bağıl hareket: MM:dx,dy
                         {
@@ -2629,6 +2644,14 @@ namespace PCKumanda
             if (i < 0) return "";
             string v = path.Substring(i + key.Length + 1).Split('&')[0];
             try { return Uri.UnescapeDataString(v.Replace("+", " ")); } catch { return v; }
+        }
+
+        // 4..6 haneli saf rakam dizisi mi (PIN kapatildiğinda telefonun ekledigi |pin ekini ayirt etmek icin)
+        private static bool IsDigitRun(string s)
+        {
+            if (s.Length < 4 || s.Length > 6) return false;
+            foreach (char c in s) if (c < '0' || c > '9') return false;
+            return true;
         }
 
         private static readonly string[] AllowedRoots = { "Desktop", "Downloads", "Documents", "Pictures", "Music", "Videos" };
@@ -2857,10 +2880,15 @@ namespace PCKumanda
 
                 // ---- PIN kapisi: yanlis/eksik PIN onay penceresi hic acilmadan 403 ----
                 // (kotu niyetli web sitelerinin ve agdaki yabancilarin onay diyalogunu spamlemesini engeller)
+                // PinRequired=false ise bu katman atlanir.
                 string pinH;
                 bool pinOk = headers.TryGetValue("X-Pin", out pinH) && Pairing.IsValid(pinH.Trim());
-                if (!pinOk && localRequest && method == "GET" && (path == "/pair" || path.StartsWith("/pair?")))
-                    pinOk = true; // bu bilgisayardan acilan QR sayfasina izin (QR icinde PIN vardir)
+                if (!pinOk)
+                {
+                    if (!PinRequired) pinOk = true;
+                    else if (localRequest && method == "GET" && (path == "/pair" || path.StartsWith("/pair?")))
+                        pinOk = true; // bu bilgisayardan acilan QR sayfasina izin (QR icinde PIN vardir)
+                }
 
                 if (!pinOk)
                 {
@@ -3347,7 +3375,7 @@ namespace PCKumanda
 <body>
 <div id='login'>
  <h3>&#128187; PC Kumanda</h3>
- <input id='pin' type='password' inputmode='numeric' maxlength='6' placeholder='Eşleme PIN kodu (PC ekranında yazar)'>
+ <input id='pin' type='password' inputmode='numeric' maxlength='4' placeholder='4 haneli esleme PIN kodu'>
  <div class='stat' id='lstat'></div>
  <button class='pri' style='width:100%' onclick='doLogin()'>Bağlan</button>
 </div>

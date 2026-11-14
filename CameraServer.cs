@@ -96,7 +96,7 @@ namespace PCKumanda
                     string[] kv = part.Split('=');
                     if (kv.Length == 2 && kv[0] == "pin") pin = kv[1];
                 }
-                if (!Pairing.IsValid(pin))
+                if (NetServer.PinRequired && !Pairing.IsValid(pin))
                 {
                     Notify("kamera: PIN reddi — bağlantı kapatıldı");
                     return;
